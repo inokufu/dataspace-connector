@@ -1,4 +1,15 @@
 version: '3'
+
+
+x-logging:
+  &default-logging
+  driver: "json-file"
+  options:
+    max-size: "100m"
+    max-file: "14"
+    compress: "true"
+
+
 services:
   dataspace-connector:
     container_name: dataspace-connector
@@ -12,10 +23,13 @@ services:
     tty: true
     volumes:
       - './src/:/usr/src/app/src'
-    ports:
-      - 3002:${PORT}
-#    links:
-#      - mongodb
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dsc.rule=Host(`${DOMAIN_NAME}`)"
+      - "traefik.http.routers.dsc.entrypoints=websecure"
+      - "traefik.http.routers.dsc.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dsc.loadbalancer.server.port=${PORT:-3000}"
+    logging: *default-logging
     env_file:
       - .env
     environment:
@@ -29,11 +43,42 @@ services:
     build:
       context: .
       dockerfile: docker/mongodb/Dockerfile
-    #    Uncomment to connect mongodb container to mongo compass or another service
-    ports:
-      - "27018:27017"
+    # Uncomment to connect mongodb container to mongo compass or another service
+    # ports:
+    #   - "27018:27017"
     volumes:
       - ./data:/data/db
+    logging: *default-logging
+    networks:
+      - dataspace-connector
+
+
+  traefik:
+    image: traefik:${TRAEFIK_RELEASE:-v3.3.2}
+    container_name: "traefik"
+    command:
+      # App configuration
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--log.level=${LOG_LEVEL:-DEBUG}"
+      - "--accesslog=true"
+      - "--api.dashboard=false"
+
+      # HTTPS Configuration
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--certificatesresolvers.letsencrypt.acme.email=${LETS_ENCRYPT_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./letsencrypt:/letsencrypt:rw"
+    logging: *default-logging
+    restart: unless-stopped
     networks:
       - dataspace-connector
 
