@@ -19,6 +19,8 @@ services:
     tty: true
     volumes:
       - './src/:/usr/src/app/src'
+    # ports:
+    #   - 3002:${PORT}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.dsc.rule=Host(`${DOMAIN_NAME}`)"
