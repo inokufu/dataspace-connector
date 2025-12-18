@@ -1,6 +1,10 @@
 import { Logger } from '../../../libs/loggers';
-import { IInfrastructureConfiguration } from '../../../utils/types/infrastructureConfiguration';
-import { PipelineMeta } from 'dpcp-library';
+import {
+    ChainStatus,
+    NodeSignal,
+    NodeSupervisor,
+    PipelineMeta,
+} from 'dpcp-library/lib';
 import { handle } from '../../../libs/loaders/handler';
 import {
     getRepresentation,
@@ -19,6 +23,10 @@ import { getContract } from '../../../libs/third-party/contract';
 import { selfDescriptionProcessor } from '../../../utils/selfDescriptionProcessor';
 import { pepVerification } from '../../../utils/pepVerification';
 import { verifyInfrastructureInContract } from '../../../utils/verifyInfrastructureInContract';
+import { isJsonString } from '../../../utils/isJsonString';
+import {getConfigFile, getEndpoint} from '../../../libs/loaders/configuration';
+import { ServiceChainAdapterService } from './servicechainadapter.public.service';
+import { ObjectId } from 'mongodb';
 
 type CallbackMeta = PipelineMeta & {
     configuration: {
@@ -48,12 +56,25 @@ export const nodeCallbackService = async (props: {
         nextNodeResolver,
     } = props;
     let output: any;
-    let confs: any[];
-    let conf: any;
     let decryptedConsent: IDecryptedConsent;
 
     const dataExchange = await DataExchange.findOne({
-        providerDataExchange: (meta as CallbackMeta).configuration.dataExchange,
+        $or: [
+            {
+                consumerDataExchange: (meta as CallbackMeta).configuration
+                    .dataExchange,
+            },
+            {
+                providerDataExchange: (meta as CallbackMeta).configuration
+                    .dataExchange,
+            },
+            {
+                _id: new ObjectId(
+                    (meta as CallbackMeta).configuration.dataExchange
+                ),
+            },
+            { _id: (meta as CallbackMeta).configuration.dataExchange },
+        ],
     });
 
     if (!dataExchange) {
@@ -85,7 +106,7 @@ export const nodeCallbackService = async (props: {
             pep = verifyInfrastructureInContract({
                 service: targetId,
                 contract: contractResp,
-                chainId: chainId.split(':')[1].split('-')[0],
+                chainId: dataExchange?.serviceChain?.catalogId,
             });
         }
 
@@ -120,38 +141,16 @@ export const nodeCallbackService = async (props: {
                 }
             }
 
-            // if (
-            //     //@ts-ignore
-            //     meta?.configuration?.infrastructureConfiguration &&
-            //     //@ts-ignore
-            //     meta?.configuration?.infrastructureConfiguration.includes(',')
-            // ) {
-            //     confs = await InfrastructureConfiguration.find({
-            //         _id: {
-            //             //@ts-ignore
-            //             $in: meta?.configuration?.infrastructureConfiguration.split(
-            //                 ','
-            //             ),
-            //         },
-            //     });
-            // } else {
-            //     conf = await InfrastructureConfiguration.findById(
-            //         //@ts-ignore
-            //         meta?.configuration?.infrastructureConfiguration
-            //     );
-            // }
-
             //retrieve offer by targetId
             const [offer] = await handle(getCatalogData(targetId));
 
             // data Resources = augmented data // no use of the raw data
             if (offer.dataResources && offer.dataResources.length > 0) {
                 for (const dataResource of offer.dataResources) {
-                    //choose wich conf use
-                    // const usedConf =
-                    //     confs?.find(
-                    //         (element) => element.resource === dataResource
-                    //     ) || conf;
+                    //look in data exchange if params exists for this resource in serviceChainParams array
+                    const resource = dataExchange.serviceChainParams.filter(
+                        (element) => element?.resource === dataResource
+                    );
 
                     //retrieve targetId = offer
                     const [dataResourceSD] = await handle(
@@ -161,21 +160,32 @@ export const nodeCallbackService = async (props: {
                         dataResourceSD.representation &&
                         dataResourceSD.representation.url
                     ) {
-                        const [data] = await handle(
-                            getRepresentation({
-                                method: dataResourceSD.representation?.method,
-                                endpoint: dataResourceSD.representation.url,
-                                credential:
-                                    dataResourceSD.representation?.credential,
-                                dataExchange,
-                                chainId,
-                                nextTargetId,
-                                previousTargetId,
-                                targetId,
-                            })
-                        );
+                        const payload = {
+                            resource,
+                            method: dataResourceSD.representation?.method,
+                            endpoint: dataResourceSD.representation.url,
+                            credential:
+                                dataResourceSD.representation?.credential,
+                            representationQueryParams:
+                                dataResourceSD?.representation?.queryParams,
+                            dataExchange,
+                            chainId,
+                            nextTargetId,
+                            previousTargetId,
+                            targetId,
+                        };
 
-                        output = data;
+                        if (getConfigFile().serviceChainAdapter) {
+                            output = await new ServiceChainAdapterService(
+                                payload
+                            ).processGetRepresentationFlow();
+                        } else {
+                            const [data] = await handle(
+                                getRepresentation(payload)
+                            );
+
+                            output = data;
+                        }
                     }
                 }
             }
@@ -183,11 +193,10 @@ export const nodeCallbackService = async (props: {
             // softwareResource = default POST data, use conf if exists and check for is API
             if (offer.softwareResources && offer.softwareResources.length > 0) {
                 for (const softwareResource of offer.softwareResources) {
-                    // choose wich conf to use
-                    const usedConf =
-                        confs?.find(
-                            (element) => element.resource === softwareResource
-                        ) || conf;
+                    //look in data exchange if params exists for this resource in serviceChainParams array
+                    const resource = dataExchange.serviceChainParams.filter(
+                        (element) => element?.resource === softwareResource
+                    );
 
                     //retrieve targetId = offer
                     const [softwareResourceSD] = await handle(
@@ -198,11 +207,17 @@ export const nodeCallbackService = async (props: {
                         softwareResourceSD.representation &&
                         softwareResourceSD.representation.url
                     ) {
+                        const params = (meta as CallbackMeta)?.configuration
+                            ?.params;
+
+                        const jsonString = Object.values(params).join('');
+
                         const dataPayload = {
                             data: data.data ?? data,
                             contract: dataExchange.contract,
-                            params: (meta as CallbackMeta)?.configuration
-                                ?.params,
+                            params: isJsonString(jsonString)
+                                ? JSON.parse(jsonString)
+                                : jsonString,
                             ...(data.previousNodeParams
                                 ? {
                                       previousNodeParams:
@@ -211,15 +226,14 @@ export const nodeCallbackService = async (props: {
                                 : {}),
                         };
 
-                        // Only add consent if it has a value
-                        // if (data?.consent) {
-                        //     dataPayload.consent = data.consent;
-                        // }
+                        let response = null;
 
-                        const response = await postOrPutRepresentation({
+                        const payload = {
+                            resource: resource[0]?.resource,
                             representationUrl:
                                 softwareResourceSD.representation.url,
-                            verb: conf?.verb,
+                            representationQueryParams:
+                                softwareResourceSD.representation?.queryParams,
                             data: dataPayload,
                             credential:
                                 softwareResourceSD.representation?.credential,
@@ -235,7 +249,15 @@ export const nodeCallbackService = async (props: {
                             previousTargetId,
                             nextNodeResolver,
                             targetId,
-                        });
+                        };
+
+                        if (getConfigFile().serviceChainAdapter) {
+                            response = await new ServiceChainAdapterService(
+                                payload
+                            ).processPotsOrPutRepresentationFlow();
+                        } else {
+                            response = await postOrPutRepresentation(payload);
+                        }
 
                         if (response && softwareResourceSD.isAPI)
                             output = response?.data ?? response;
@@ -247,9 +269,15 @@ export const nodeCallbackService = async (props: {
             return {
                 ...output,
             };
+        } else {
+            await dataExchange?.updateStatus(
+                DataExchangeStatusEnum.PEP_ERROR,
+                "The policies can't be verified",
+                await getEndpoint()
+            );
         }
     } catch (e) {
-        await dataExchange.updateStatus(
+        await dataExchange?.updateStatus(
             DataExchangeStatusEnum.NODE_CALLBACK_ERROR,
             e.message
         );
@@ -280,7 +308,22 @@ export const nodePreCallbackService = async (props: {
     } = props;
 
     const dataExchange = await DataExchange.findOne({
-        providerDataExchange: (meta as CallbackMeta).configuration.dataExchange,
+        $or: [
+            {
+                consumerDataExchange: (meta as CallbackMeta).configuration
+                    .dataExchange,
+            },
+            {
+                providerDataExchange: (meta as CallbackMeta).configuration
+                    .dataExchange,
+            },
+            {
+                _id: new ObjectId(
+                    (meta as CallbackMeta).configuration.dataExchange
+                ),
+            },
+            { _id: (meta as CallbackMeta).configuration.dataExchange },
+        ],
     });
 
     if (!dataExchange) {
@@ -312,7 +355,7 @@ export const nodePreCallbackService = async (props: {
             pep = verifyInfrastructureInContract({
                 service: targetId,
                 contract: contractResp,
-                chainId: chainId.split(':')[1].split('-')[0],
+                chainId: dataExchange?.serviceChain?.catalogId,
             });
         }
 
@@ -340,6 +383,9 @@ export const nodePreCallbackService = async (props: {
                                 nextTargetId,
                                 previousTargetId,
                                 nextNodeResolver,
+                                proxy: dataResourceSD?.representation?.proxy,
+                                mimeType:
+                                    dataResourceSD?.representation?.mimeType,
                             })
                         );
 
@@ -417,22 +463,47 @@ export const nodePreCallbackService = async (props: {
     }
 };
 
-const selectData = (conf: IInfrastructureConfiguration, data: any) => {
-    if (!data.latestData && !data.transformedData) {
-        return data;
-    }
+export const nodeResumeService = async (props: {
+    hostURI?: string;
+    targetId: string;
+    data?: any;
+    params?: any;
+    chainId: string;
+}): Promise<{ success: boolean }> => {
+    const { chainId, data, params, targetId, hostURI } = props;
 
-    if (!conf) return data.latestData;
+    try {
+        const nodeSupervisor = NodeSupervisor.retrieveService();
 
-    switch (conf.data) {
-        case 'latestData': {
-            return data.latestData;
+        if (!hostURI || hostURI === 'local') {
+            const nodes = nodeSupervisor.getNodesByServiceAndChain(
+                targetId,
+                chainId
+            );
+            const nodeId = nodes[0]?.getId();
+            await nodeSupervisor.enqueueSignals(
+                nodeId,
+                [NodeSignal.NODE_RESUME],
+                { data, params }
+            );
+        } else if (hostURI && hostURI !== 'local') {
+            nodeSupervisor.remoteReport(
+                {
+                    status: ChainStatus.CHAIN_NOTIFIED,
+                    signal: NodeSignal.NODE_SUSPEND,
+                    payload: { targetId, hostURI },
+                },
+                chainId
+            );
+        } else {
+            return { success: false };
         }
-        case 'augmentedData': {
-            return data.augmentedData;
-        }
-        case 'latestData:augmentedData': {
-            return { ...data.latestData, ...data.transformedData };
-        }
+
+        return { success: true };
+    } catch (e) {
+        Logger.error({
+            message: e.message,
+            location: 'nodeResumeService',
+        });
     }
 };

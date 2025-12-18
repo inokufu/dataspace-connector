@@ -6,6 +6,11 @@ import { handle } from './handler';
 import { User } from '../../utils/types/user';
 import { getCredentialByIdService } from '../../services/private/v1/credential.private.service';
 import { Headers } from '../../utils/types/headers';
+import { IProxyRepresentation } from '../../utils/types/proxyRepresentation';
+import {
+    getPayloadType,
+    postOrPutPayloadType,
+} from '../../utils/types/representationFetcherType';
 
 /**
  * POST data to given representation URL
@@ -19,6 +24,7 @@ import { Headers } from '../../utils/types/headers';
  * @return Promise<any>
  */
 export const postRepresentation = async (params: {
+    resource?: any;
     method: string;
     endpoint: string;
     data: any;
@@ -30,18 +36,23 @@ export const postRepresentation = async (params: {
     previousTargetId?: string;
     nextNodeResolver?: string;
     targetId?: string;
+    representationQueryParams?: string[];
+    proxy?: IProxyRepresentation;
 }) => {
     const {
+        resource,
         method,
         endpoint,
         data,
         credential,
         decryptedConsent,
         dataExchange,
+        representationQueryParams,
         chainId,
         nextTargetId,
         previousTargetId,
         targetId,
+        proxy,
     } = params;
 
     let cred;
@@ -60,14 +71,31 @@ export const postRepresentation = async (params: {
         targetId,
     });
 
+    let url = endpoint;
+    if (representationQueryParams?.length > 0) {
+        const { url: urlWithParams } = await paramsMapper({
+            resource,
+            representationQueryParams,
+            dataExchange,
+            url,
+            type: 'consumerParams',
+        });
+        url = urlWithParams;
+    }
+
+    const axiosProxy = await proxyProcessing(proxy);
+
     switch (method) {
         case 'none':
-            return await axios.post(endpoint, data, {
+            return await axios.post(url, data, {
                 headers: headers,
+                ...(axiosProxy.host && axiosProxy.port
+                    ? { proxy: axiosProxy }
+                    : {}),
             });
         case 'basic':
             return await axios.post(
-                endpoint,
+                url,
                 {
                     ...data,
                     username: cred.key,
@@ -75,14 +103,20 @@ export const postRepresentation = async (params: {
                 },
                 {
                     headers: headers,
+                    ...(axiosProxy.host && axiosProxy.port
+                        ? { proxy: axiosProxy }
+                        : {}),
                 }
             );
         case 'apiKey':
-            return await axios.post(endpoint, data, {
+            return await axios.post(url, data, {
                 headers: {
                     [cred.key]: cred.value,
                     ...headers,
                 },
+                ...(axiosProxy.host && axiosProxy.port
+                    ? { proxy: axiosProxy }
+                    : {}),
             });
     }
 };
@@ -110,6 +144,7 @@ export const putRepresentation = async (params: {
     previousTargetId?: string;
     nextNodeResolver?: string;
     targetId?: string;
+    proxy?: IProxyRepresentation;
 }) => {
     const {
         method,
@@ -123,6 +158,7 @@ export const putRepresentation = async (params: {
         previousTargetId,
         nextNodeResolver,
         targetId,
+        proxy,
     } = params;
 
     let cred;
@@ -141,10 +177,15 @@ export const putRepresentation = async (params: {
         nextNodeResolver,
     });
 
+    const axiosProxy = await proxyProcessing(proxy);
+
     switch (method) {
         case 'none':
             return await axios.put(endpoint, data, {
                 headers: headers,
+                ...(axiosProxy.host && axiosProxy.port
+                    ? { proxy: axiosProxy }
+                    : {}),
             });
         case 'basic':
             return await axios.put(
@@ -156,6 +197,9 @@ export const putRepresentation = async (params: {
                 },
                 {
                     headers: headers,
+                    ...(axiosProxy.host && axiosProxy.port
+                        ? { proxy: axiosProxy }
+                        : {}),
                 }
             );
         case 'apiKey':
@@ -164,6 +208,9 @@ export const putRepresentation = async (params: {
                     [cred.key]: cred.value,
                     ...headers,
                 },
+                ...(axiosProxy.host && axiosProxy.port
+                    ? { proxy: axiosProxy }
+                    : {}),
             });
     }
 };
@@ -180,27 +227,16 @@ export const putRepresentation = async (params: {
  * @param {IDataExchange} params.dataExchange - Data Exchange
  * @return Promise<any>
  */
-export const getRepresentation = async (params: {
-    resource?: any;
-    method: string;
-    endpoint: string;
-    credential: string;
-    decryptedConsent?: any;
-    representationQueryParams?: string[];
-    dataExchange?: IDataExchange;
-    chainId?: string;
-    nextTargetId?: string;
-    previousTargetId?: string;
-    nextNodeResolver?: string;
-    targetId?: string;
-}) => {
+export const getRepresentation = async (params: getPayloadType) => {
     const {
         resource,
         method,
+        mimeType,
         endpoint,
         credential,
         decryptedConsent,
         representationQueryParams,
+        proxy,
         dataExchange,
         chainId,
         nextTargetId,
@@ -246,14 +282,23 @@ export const getRepresentation = async (params: {
             representationQueryParams,
             dataExchange,
             url,
+            type: 'providerParams',
         });
         url = urlWithParams;
     }
+
+    const axiosProxy = await proxyProcessing(proxy);
 
     switch (method) {
         case 'none':
             return await axios.get(url, {
                 headers: headers,
+                ...(axiosProxy.host && axiosProxy.port
+                    ? { proxy: axiosProxy }
+                    : {}),
+                ...(mimeType && !mimeType.includes('application/json')
+                    ? { responseType: 'arraybuffer' }
+                    : {}),
             });
         case 'apiKey':
             return await axios.get(url, {
@@ -261,6 +306,12 @@ export const getRepresentation = async (params: {
                     [cred.key]: cred.value,
                     ...headers,
                 },
+                ...(axiosProxy.host && axiosProxy.port
+                    ? { proxy: axiosProxy }
+                    : {}),
+                ...(mimeType && !mimeType.includes('application/json')
+                    ? { responseType: 'arraybuffer' }
+                    : {}),
             });
     }
 };
@@ -278,22 +329,9 @@ export const getRepresentation = async (params: {
  * @param {IDataExchange} params.dataExchange - Data Exchange
  * @return Promise<any>
  */
-export const postOrPutRepresentation = async (params: {
-    representationUrl: string;
-    data: any;
-    method: string;
-    verb?: string;
-    credential?: string;
-    user?: string;
-    decryptedConsent?: any;
-    dataExchange?: IDataExchange;
-    chainId?: string;
-    nextTargetId?: string;
-    previousTargetId?: string;
-    nextNodeResolver?: string;
-    targetId?: string;
-}) => {
+export const postOrPutRepresentation = async (params: postOrPutPayloadType) => {
     const {
+        resource,
         representationUrl,
         data,
         method,
@@ -306,6 +344,8 @@ export const postOrPutRepresentation = async (params: {
         previousTargetId,
         nextNodeResolver,
         targetId,
+        representationQueryParams,
+        proxy,
     } = params;
     // if contains params in URL is PUT Method
     if (representationUrl.match(Regexes.userIdParams)) {
@@ -329,6 +369,7 @@ export const postOrPutRepresentation = async (params: {
                 previousTargetId,
                 nextNodeResolver,
                 targetId,
+                proxy,
             })
         );
 
@@ -342,6 +383,7 @@ export const postOrPutRepresentation = async (params: {
 
         const [postData] = await handle(
             postRepresentation({
+                resource,
                 method,
                 endpoint: url,
                 data,
@@ -353,6 +395,8 @@ export const postOrPutRepresentation = async (params: {
                 previousTargetId,
                 nextNodeResolver,
                 targetId,
+                representationQueryParams,
+                proxy,
             })
         );
 
@@ -364,6 +408,7 @@ export const postOrPutRepresentation = async (params: {
             case 'POST': {
                 const [postData] = await handle(
                     postRepresentation({
+                        resource,
                         method,
                         endpoint: representationUrl,
                         data,
@@ -374,6 +419,8 @@ export const postOrPutRepresentation = async (params: {
                         previousTargetId,
                         nextNodeResolver,
                         targetId,
+                        representationQueryParams,
+                        proxy,
                     })
                 );
 
@@ -392,6 +439,7 @@ export const postOrPutRepresentation = async (params: {
                         previousTargetId,
                         nextNodeResolver,
                         targetId,
+                        proxy,
                     })
                 );
 
@@ -400,6 +448,7 @@ export const postOrPutRepresentation = async (params: {
             default: {
                 const [postData] = await handle(
                     postRepresentation({
+                        resource,
                         method,
                         endpoint: representationUrl,
                         data,
@@ -410,6 +459,8 @@ export const postOrPutRepresentation = async (params: {
                         previousTargetId,
                         nextNodeResolver,
                         targetId,
+                        representationQueryParams,
+                        proxy,
                     })
                 );
 
@@ -479,8 +530,44 @@ const headerProcessing = (params: {
             'x-ptx-dataExchangeId': dataExchange?._id.toString(),
             'x-ptx-contractId': dataExchange.contract.split('/').pop(),
             'x-ptx-contractURL': dataExchange.contract,
+            'content-type':
+                dataExchange.providerData.mimetype || 'application/json',
         };
     }
 
     return headers;
+};
+
+/**
+ * Process the proxy information for axios request from the representation
+ * @param proxy
+ */
+const proxyProcessing = async (proxy: IProxyRepresentation) => {
+    const axiosProxy: {
+        host: string;
+        port: number;
+        protocol?: string;
+        auth?: {
+            username: string;
+            password: string;
+        };
+    } = {
+        host: proxy?.host,
+        port: proxy?.port,
+        protocol: proxy?.protocol,
+    };
+
+    if (proxy?.credential) {
+        const proxyCredential = await getCredentialByIdService(
+            proxy?.credential
+        );
+        if (proxyCredential && proxyCredential.type === 'proxy') {
+            axiosProxy.auth = {
+                username: proxyCredential.key,
+                password: proxyCredential.value,
+            };
+        }
+    }
+
+    return axiosProxy;
 };

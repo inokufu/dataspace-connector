@@ -24,9 +24,12 @@ describe('Params Mapper', () => {
                         completed: false,
                     },
                 ],
+                purposes: [],
+                serviceChainParams: [],
                 status: 'PENDING',
             } as unknown as IDataExchange,
-            url: "https://test.com"
+            url: "https://test.com",
+            type: "providerParams"
         })
         expect(mapped).to.have.property('url', 'https://test.com');
     });
@@ -55,7 +58,8 @@ describe('Params Mapper', () => {
                 ],
                 status: 'PENDING',
             } as unknown as IDataExchange,
-            url: "https://test.com"
+            url: "https://test.com",
+            type: "providerParams"
         })
         expect(mapped).to.have.property('url', 'https://test.com?limit=25');
     });
@@ -84,7 +88,8 @@ describe('Params Mapper', () => {
                 ],
                 status: 'PENDING',
             } as unknown as IDataExchange,
-            url: "https://test.com?skip=2"
+            url: "https://test.com?skip=2",
+            type: "providerParams"
         })
         expect(mapped).to.have.property('url', 'https://test.com?skip=2&limit=25');
     });

@@ -43,6 +43,7 @@ services:
     # Uncomment to connect mongodb container to mongo compass or another service
     # ports:
     #   - "27018:27017"
+    restart: unless-stopped
     volumes:
       - ./data:/data/db
     logging: *default-logging
