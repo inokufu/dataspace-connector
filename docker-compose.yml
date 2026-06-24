@@ -30,8 +30,6 @@ services:
     logging: *default-logging
     env_file:
       - .env
-    # ports:
-    #   - 3002:${PORT}
     environment:
       MONGO_URI: ${MONGO_URI}
     depends_on:
@@ -40,6 +38,7 @@ services:
       - dataspace-connector
 
   mongodb:
+    container_name: "mongodb"
     image: mongo:latest
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
